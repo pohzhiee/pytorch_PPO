@@ -2,7 +2,7 @@ import torch
 
 
 class MlpModel(torch.nn.Module):
-    def __init__(self, input_size: int, hidden_sizes, output_size: int,
+    def __init__(self, input_size, hidden_sizes, output_size,
                  activation: torch.nn.Module = torch.nn.Tanh(),
                  output_activation: torch.nn.Module = None):
         super(MlpModel, self).__init__()
@@ -13,13 +13,13 @@ class MlpModel(torch.nn.Module):
         previous_size = input_size
         for h in hidden_sizes:
             layer = torch.nn.Linear(previous_size, h)
-            layer.weight.data.fill_(0.1)
-            layer.bias.data.fill_(0.1)
+            # layer.weight.data.fill_(0.1)
+            # layer.bias.data.fill_(0.1)
             self.layers.append(layer)
             previous_size = h
         self.final_layer = torch.nn.Linear(previous_size, output_size)
-        self.final_layer.weight.data.fill_(0.1)
-        self.final_layer.bias.data.fill_(0.1)
+        # self.final_layer.weight.data.fill_(0.1)
+        # self.final_layer.bias.data.fill_(0.1)
 
     def forward(self, x):
         for layer in self.layers:
