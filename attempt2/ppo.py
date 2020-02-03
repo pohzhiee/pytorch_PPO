@@ -43,21 +43,19 @@ class PPO:
         # mean_adv = torch.mean(adv)
         # normalised_adv = (adv-mean_adv)/stdev_adv
         clip_adv = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * adv
-        ratio_avg = np.mean(ratio.detach().numpy())
         pi_loss = -(torch.min(ratio * adv, clip_adv)).mean()
 
         approx_kl = torch.mean(logp_old - logp)
         approx_ent = torch.mean(-logp)
-        # approx_ent2 = pi.entropy().mean().item()
         clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean()
 
         return pi_loss, approx_kl, approx_ent, clipfrac
 
     def compute_loss_v(self, obs: torch.Tensor, cum_future_rew: torch.Tensor) -> torch.Tensor:
-        # mse_loss = torch.nn.MSELoss().to(self.device)
+        mse_loss = torch.nn.MSELoss().to(self.device)
         value: torch.Tensor = self.actor_critic.value_function(obs)
-        return ((value - cum_future_rew)**2).mean()
+        return mse_loss(value, cum_future_rew)
 
     def run(self):
         obs, rew, done = self.env.reset(), 0, False
@@ -99,25 +97,16 @@ class PPO:
 
     def update(self):
         data_dict = self.buffer.get_all()
-        obs_arr = data_dict['obs'].detach().cpu().numpy()
-        cum_future_rew_arr = data_dict['cum_future_rew'].detach().cpu().numpy()
-        val_arr = data_dict['val'].detach().cpu().numpy()
-        adv_arr = data_dict['adv'].detach().cpu().numpy()
-        avg_obs = np.mean(obs_arr, 0)
-        avg_cum_fut_rew = np.mean(cum_future_rew_arr)
-        avg_val = np.mean(val_arr)
-        avg_adv = np.mean(adv_arr)
         pi_loss = None
         v_loss = None
         approx_ent = None
         approx_kl = None
 
-        stdev_adv = torch.std(data_dict['adv'], unbiased=False) #TODO: Remove unbiased, now in place to check equality against spinningup
+        stdev_adv = torch.std(data_dict['adv'])
         mean_adv = torch.mean(data_dict['adv'])
         normalised_adv = (data_dict['adv']-mean_adv)/stdev_adv
 
-        avg_norm_adv = torch.mean(normalised_adv)
-        pi_loss_old, _, _, _ = self.compute_loss_pi(data_dict['obs'], data_dict['act'], normalised_adv, data_dict['logp'])
+        # pi_loss_old, _, _, _ = self.compute_loss_pi(data_dict['obs'], data_dict['act'], normalised_adv, data_dict['logp'])
 
         for _ in range(self.train_pi_iters):
             self.pi_optimizer.zero_grad()
@@ -138,19 +127,19 @@ class PPO:
         print(f'Approx kl: {approx_kl}')
         print(f'Approx entropy: {approx_ent}')
         print(f'V loss: {v_loss}')
-        print(f'Pi loss: {pi_loss_old}')
+        print(f'Pi loss: {pi_loss}')
         print(f'Clip frac: {clipfrac}')
 
 
 if __name__ == '__main__':
-    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
-    env = gym.make('CartPole-v0')
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
+    env = gym.make('CartPole-v1')
     env.seed(0)
     torch.manual_seed(0)
     np.random.seed(0)
     ppo = PPO(env, device=device)
-    for i in range(30):
+    for i in range(60):
         print(f'----------------Epoch {i}------------------')
         ppo.run()
         ppo.update()
