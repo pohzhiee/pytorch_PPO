@@ -148,7 +148,7 @@ class PPOBuffer:
 
 
 class PPO:
-    def __init__(self, gamma=0.99, lambda_=0.95, clip_ratio=0.2, pi_lr=3e-4, vf_lr=1e-3, train_pi_iters=10, train_v_iters=80,
+    def __init__(self, gamma=0.99, lambda_=0.97, clip_ratio=0.2, pi_lr=3e-4, vf_lr=1e-3, train_pi_iters=10, train_v_iters=10,
                  steps_per_epoch=5000):
         self.env: CartPoleEnv = gym.make('CartPole-v0')
         self.buffer: PPOBuffer = PPOBuffer(self.env.observation_space.shape, self.env.action_space.shape)
@@ -168,7 +168,7 @@ class PPO:
         self.clip_ratio = clip_ratio
         self.pi_lr = pi_lr  # Policy learning rate
         self.vf_lr = vf_lr  # Value function learning rate
-        self.train_pi_iters = 50
+        self.train_pi_iters = train_pi_iters
         self.train_v_iters = train_v_iters
         self.steps_per_epoch = steps_per_epoch
         self.episode_count = 0
@@ -216,12 +216,12 @@ class PPO:
     def update(self):
         obs, act, rew, done, old_val, old_logp, adv, cum_future_rew = self.buffer.get()
         self.buffer.clear()
+        optim_pi = torch.optim.Adam(self.policy.logits_model.parameters(), lr=self.pi_lr)
         for _ in range(self.train_pi_iters):
-            # we ignore the last done for splitting because even if it's done it doesn't matter, as there will be nothing else continuing after it
             pi, logp, logp_pi, value = self.policy(torch.from_numpy(obs).cuda().float(), torch.from_numpy(act).cuda().float())
-            # TODO: investigate why this gae lambda uses old value rather than new value for spinup
+            # TODO: investigate why spinup gae lambda uses old value rather than new value
             # I think they are the same though because the network didn't change
-            # Yea new and old are the same
+            # Yea new and old are the same, but only on the first update
             adv_tensor = torch.stack(adv.tolist())
             old_logp_tensor = torch.from_numpy(old_logp).cuda().float()
             ratio = torch.exp(logp - old_logp_tensor)
@@ -236,10 +236,24 @@ class PPO:
             # # TODO: Get percentage of advantages clipped here
             #
             # # Training
-            optim_pi = torch.optim.Adam(self.policy.logits_model.parameters(), lr=self.pi_lr)
+            optim_pi.zero_grad()
             pi_loss.backward(retain_graph=True)
             optim_pi.step()
-            optim_v = torch.optim.Adam(self.policy.value_function_model.parameters(), lr=self.vf_lr)
+
+        optim_v = torch.optim.Adam(self.policy.value_function_model.parameters(), lr=self.vf_lr)
+        for _ in range(self.train_v_iters):
+            pi, logp, logp_pi, value = self.policy(torch.from_numpy(obs).cuda().float(), torch.from_numpy(act).cuda().float())
+            adv_tensor = torch.stack(adv.tolist())
+            old_logp_tensor = torch.from_numpy(old_logp).cuda().float()
+            ratio = torch.exp(logp - old_logp_tensor)
+            min_adv = torch.where(adv_tensor > 0, (1 + self.clip_ratio) * adv_tensor, (1 - self.clip_ratio) * adv_tensor)
+            pi_loss = torch.mean(torch.min(ratio * adv_tensor, min_adv))
+            mse_loss = torch.nn.MSELoss().cuda()
+            v_loss = mse_loss(torch.from_numpy(cum_future_rew).cuda().float(), value.squeeze())
+            #
+            approx_kl = torch.mean(old_logp_tensor - logp)
+            approx_ent = torch.mean(-logp)
+            optim_v.zero_grad()
             v_loss.backward(retain_graph=True)
             optim_v.step()
 
