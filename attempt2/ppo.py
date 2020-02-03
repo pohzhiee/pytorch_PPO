@@ -10,7 +10,7 @@ from storage import PPOBuffer
 
 # TODO: V loss feels problematic, should be around 400-500 but why is mine 1300-1500??? what?
 class PPO:
-    def __init__(self, env: gym.Env, gamma=0.99, lambda_=0.95, clip_ratio=0.2, pi_lr=3e-4, vf_lr=1e-3, train_pi_iters=80, train_v_iters=80,
+    def __init__(self, env: gym.Env, gamma=0.99, lambda_=0.97, clip_ratio=0.2, pi_lr=3e-4, vf_lr=1e-3, train_pi_iters=80, train_v_iters=80,
                  steps_per_epoch=4000, device: torch.device = torch.device("cpu")):
         self.gamma = gamma
         self.lambda_ = lambda_
@@ -33,7 +33,7 @@ class PPO:
         self.episode_reward = 0
 
     def compute_loss_pi(self, obs: torch.Tensor, act: torch.Tensor, adv: torch.Tensor, logp_old: torch.Tensor) \
-            -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         pi, logp = self.actor_critic.pi(obs, act)
         pi: Distribution
         logp: torch.Tensor
@@ -43,6 +43,7 @@ class PPO:
         # mean_adv = torch.mean(adv)
         # normalised_adv = (adv-mean_adv)/stdev_adv
         clip_adv = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * adv
+        ratio_avg = np.mean(ratio.detach().numpy())
         pi_loss = -(torch.min(ratio * adv, clip_adv)).mean()
 
         approx_kl = torch.mean(logp_old - logp)
@@ -51,7 +52,7 @@ class PPO:
         clipped = ratio.gt(1+self.clip_ratio) | ratio.lt(1-self.clip_ratio)
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean()
 
-        return pi_loss, approx_kl, approx_ent, clipped, clipfrac
+        return pi_loss, approx_kl, approx_ent, clipfrac
 
     def compute_loss_v(self, obs: torch.Tensor, cum_future_rew: torch.Tensor) -> torch.Tensor:
         # mse_loss = torch.nn.MSELoss().to(self.device)
@@ -65,18 +66,18 @@ class PPO:
             obs_tensor = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
             action, val, logp = self.actor_critic.step(obs_tensor)
 
-            self.buffer.store(obs, action, rew, done, val, logp)
-            obs, rew, done, info = self.env.step(action)
+            next_obs, rew, done, info = self.env.step(action)
 
+            self.buffer.store(obs, action, rew, done, val, logp)
             self.episode_reward += rew
 
-            terminal = done or i == self.steps_per_epoch - 1
+            obs = next_obs
 
             # timeout = ep_len == max_ep_len
             # terminal = d
             epoch_ended = i == self.steps_per_epoch - 1
 
-            if terminal or epoch_ended:
+            if done or epoch_ended:
                 # Do buffer stuff, mainly calculating advantage and future rewards for each episode, which is done in the finish_episode function
 
                 if epoch_ended:
@@ -86,7 +87,7 @@ class PPO:
 
                 self.buffer.finish_episode(v, self.gamma, self.lambda_)
 
-                if i != self.steps_per_epoch - 1:
+                if done:
                     cumulative_reward_buffer.append(self.episode_reward)
                 obs, rew, done = self.env.reset(), 0, False
                 self.episode_count += 1
@@ -98,18 +99,29 @@ class PPO:
 
     def update(self):
         data_dict = self.buffer.get_all()
+        obs_arr = data_dict['obs'].detach().cpu().numpy()
+        cum_future_rew_arr = data_dict['cum_future_rew'].detach().cpu().numpy()
+        val_arr = data_dict['val'].detach().cpu().numpy()
+        adv_arr = data_dict['adv'].detach().cpu().numpy()
+        avg_obs = np.mean(obs_arr, 0)
+        avg_cum_fut_rew = np.mean(cum_future_rew_arr)
+        avg_val = np.mean(val_arr)
+        avg_adv = np.mean(adv_arr)
         pi_loss = None
         v_loss = None
         approx_ent = None
         approx_kl = None
 
-        stdev_adv = torch.std(data_dict['adv'])
+        stdev_adv = torch.std(data_dict['adv'], unbiased=False) #TODO: Remove unbiased, now in place to check equality against spinningup
         mean_adv = torch.mean(data_dict['adv'])
         normalised_adv = (data_dict['adv']-mean_adv)/stdev_adv
 
+        avg_norm_adv = torch.mean(normalised_adv)
+        pi_loss_old, _, _, _ = self.compute_loss_pi(data_dict['obs'], data_dict['act'], normalised_adv, data_dict['logp'])
+
         for _ in range(self.train_pi_iters):
             self.pi_optimizer.zero_grad()
-            pi_loss, approx_kl, approx_ent, clipped, clipfrac = self.compute_loss_pi(data_dict['obs'], data_dict['act'], normalised_adv, data_dict['logp'])
+            pi_loss, approx_kl, approx_ent, clipfrac = self.compute_loss_pi(data_dict['obs'], data_dict['act'], normalised_adv, data_dict['logp'])
             if approx_kl > 1.5 * 0.01:
                 print("Stopping early...")
                 break
@@ -126,13 +138,17 @@ class PPO:
         print(f'Approx kl: {approx_kl}')
         print(f'Approx entropy: {approx_ent}')
         print(f'V loss: {v_loss}')
-        print(f'Pi loss: {pi_loss}')
+        print(f'Pi loss: {pi_loss_old}')
+        print(f'Clip frac: {clipfrac}')
 
 
 if __name__ == '__main__':
     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     device = torch.device("cpu")
     env = gym.make('CartPole-v0')
+    env.seed(0)
+    torch.manual_seed(0)
+    np.random.seed(0)
     ppo = PPO(env, device=device)
     for i in range(30):
         print(f'----------------Epoch {i}------------------')

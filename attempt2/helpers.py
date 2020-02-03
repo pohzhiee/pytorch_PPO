@@ -2,6 +2,7 @@ from typing import Union
 import numpy as np
 import scipy.signal
 import torch
+from torch.nn import Sequential, Linear
 
 def combine_shape(length, shape=None):
     if shape is None:
@@ -29,36 +30,19 @@ def discount_cumsum(x, discount):
 
 def gae(gamma, lambda_, rewards: Union[np.ndarray, torch.Tensor], predicted_values: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
     deltas = rewards[:-1] + gamma * predicted_values[1:] - predicted_values[:-1]
+    gamma_lambda = gamma * lambda_
     return discount_cumsum(deltas, gamma * lambda_)
 
 
-
-class MlpModel(torch.nn.Module):
-    def __init__(self, input_size, hidden_sizes, output_size,
-                 activation: torch.nn.Module = torch.nn.Tanh(),
-                 output_activation: torch.nn.Module = None,
-                 device=torch.device('cpu')):
-        super(MlpModel, self).__init__()
-
-        self.activation: torch.nn.Module = activation
-        self.output_activation: torch.nn.Module = output_activation
-        self.layers = []
+class MlpModel(Sequential):
+    def __init__(self, input_size, hidden_sizes, output_size, activation: torch.nn.Module = torch.nn.Tanh(),
+                 output_activation: torch.nn.Module = None, device=torch.device('cpu')):
+        super().__init__()
         previous_size = input_size
-        for h in hidden_sizes:
-            layer = torch.nn.Linear(previous_size, h).to(device)
-            # layer.weight.data.fill_(0.1)
-            # layer.bias.data.fill_(0.1)
-            self.layers.append(layer)
+        for i, h in enumerate(hidden_sizes):
+            self.add_module(f'layer{i+1}', Linear(previous_size, h))
+            self.add_module(f'layer{i+1}_activation', activation)
             previous_size = h
-        self.final_layer = torch.nn.Linear(previous_size, output_size).to(device)
-        # self.final_layer.weight.data.fill_(0.1)
-        # self.final_layer.bias.data.fill_(0.1)
-
-    def forward(self, x):
-        for layer in self.layers:
-            val = layer(x)
-            x = self.activation(val)
-        output = self.final_layer(x)
-        if self.output_activation is not None:
-            output = self.output_activation(output)
-        return output
+        self.add_module(f'output_layer', Linear(previous_size, output_size))
+        if output_activation is not None:
+            self.add_module(f'output_activation', output_activation)

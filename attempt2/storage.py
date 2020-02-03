@@ -55,7 +55,7 @@ class PPOBuffer:
         episode_advantages = gae(gamma, lambda_, episode_rewards, episode_vals)
         # We ignore the first episode reward because the value at state 0 is the sum of reward of state 1 onwards
         # and has nothing to do with reward of state 0
-        cumulative_future_rewards = discount_cumsum(episode_rewards[1:], gamma)
+        cumulative_future_rewards = discount_cumsum(episode_rewards[:-1], gamma)
 
         self.buf_dict['adv'][episode_slice] = episode_advantages
         self.buf_dict['cum_future_rew'][episode_slice] = cumulative_future_rewards

@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/pytorch_test1.iml" filepath="$PROJECT_DIR$/.idea/pytorch_test1.iml" />
+      <module fileurl="file://$USER_HOME$/spinningup/.idea/spinningup.iml" filepath="$USER_HOME$/spinningup/.idea/spinningup.iml" />
     </modules>
   </component>
 </project>
